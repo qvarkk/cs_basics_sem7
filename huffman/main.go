@@ -40,6 +40,7 @@ type model struct {
 	selectedFile	string
 	quitting			bool
 	keys 					keyMap
+	output				*compressionInfo
 	err 					error
 }
 
@@ -71,13 +72,6 @@ var defaultKeyMap = keyMap{
 	Help: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "toggle help"),
-	),
-}
-
-var quitOnlyKeyMap = keyMap{
-	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "exit"),
 	),
 }
 
@@ -162,8 +156,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if didSelect, path := m.filepicker.DidSelectFile(msg); didSelect {
 			m.selectedFile = path
 			m.state = stateDone
-			m.keys = quitOnlyKeyMap
-			m.err = handleHuffmanCoding(path)			
+			m.keys = keyMap{}
+			m.output, m.err = handleHuffmanCoding(path)			
 		}
 
 		if didSelect, path := m.filepicker.DidSelectDisabledFile(msg); didSelect {
@@ -174,13 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, cmd
 	case stateDone:
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			if key.Matches(msg, m.keys.Quit) {
-				m.quitting = true
-				return m, tea.Quit
-			}
-		}
+		return m, tea.Quit
 	}
 
 	return m, nil
@@ -215,15 +203,70 @@ func (m model) View() string {
 	case stateDone:
 		s.WriteString(fmt.Sprintf("You chose: %s%s%s\n", ColorYellow, m.choices[m.selected], ColorReset))
 		s.WriteString(fmt.Sprintf("On file: %s%s%s\n\n", ColorYellow, m.selectedFile, ColorReset))
+		s.WriteString(fmt.Sprintf("Size before compression: %s%d%s bytes\n", ColorRed, m.output.initialSize, ColorReset))
+		s.WriteString(fmt.Sprintf("Size after compression: %s%d%s bytes\n\n", ColorGreen, m.output.compressedSize, ColorReset))
 		if m.err != nil {
 			s.WriteString(fmt.Sprintf("%sError:%s %v\n", ColorRed, ColorReset, m.err))
 		} else {
-			s.WriteString("Operation" + ColorGreen + " successful" + "\n\n")
+			s.WriteString("Operation" + ColorGreen + " successful" + ColorReset + "\n\n")
 		}
+		s.WriteString(ColorYellow + "Press any key to exit\n\n")
 	}
 
 	s.WriteString(m.help.View(m.keys))
 	return s.String()
+}
+
+type compressionInfo struct {
+	initialSize			int64
+	compressedSize	int64
+}
+
+func handleHuffmanCoding(path string) (*compressionInfo, error) {
+	fileStat, err := os.Stat(path)
+	if err != nil {
+			return nil, fmt.Errorf("could not stat input file: %w", err)
+	}
+
+  initialSize := fileStat.Size()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("could not read input file: %w", err)
+	}
+
+	var buf bytes.Buffer
+	err = huffman.Code(string(data), &buf)
+	if err != nil {
+		return nil, fmt.Errorf("compression error: %w", err)
+	}
+
+	outputPath := "output.bin"
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("could not create output file: %w", err)
+	}
+	defer outputFile.Close()
+
+	_, err = buf.WriteTo(outputFile)
+	if err != nil {
+		return nil, fmt.Errorf("could not write compressed data: %w", err)
+	}
+
+	outStat, err := os.Stat(outputPath)
+	if err != nil {
+			return nil, fmt.Errorf("could not stat output file: %w", err)
+	}
+	compressedSize := outStat.Size()
+
+	return &compressionInfo{
+			initialSize:    initialSize,
+			compressedSize: compressedSize,
+	}, nil
+}
+
+func handleHuffmanDecoding() {
+
 }
 
 func main() {
@@ -232,34 +275,4 @@ func main() {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)
 	}
-}
-
-func handleHuffmanCoding(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	var buf bytes.Buffer
-	err = huffman.Code(string(data), &buf)
-	if err != nil {
-		return err
-	}
-
-	outputFile, err := os.Create("output.bin")
-	if err != nil {
-		return err
-	}
-	defer outputFile.Close()
-
-	_, err = buf.WriteTo(outputFile)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func handleHuffmanDecoding() {
-
 }
