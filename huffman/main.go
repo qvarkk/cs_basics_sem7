@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -86,7 +87,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 func initialModel() model {
 	fp := filepicker.New()
 	fp.SetHeight(5)
-	fp.AllowedTypes = []string{".txt", ".md", ".go"}
+	fp.AllowedTypes = []string{".txt", ".md", ".go", ".bin"}
 	fp.CurrentDirectory, _ = os.UserHomeDir()
 	return model{
 		choices:		[]string{"Compress file", "Decompress file"},
@@ -157,7 +158,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedFile = path
 			m.state = stateDone
 			m.keys = keyMap{}
-			m.output, m.err = handleHuffmanCoding(path)			
+			if m.selected == 0 {
+				m.output, m.err = handleHuffmanCoding(path)			
+			} else {
+				m.err = handleHuffmanDecoding(path)
+			}
 		}
 
 		if didSelect, path := m.filepicker.DidSelectDisabledFile(msg); didSelect {
@@ -197,20 +202,26 @@ func (m model) View() string {
 		if m.err != nil {
 			s.WriteString(fmt.Sprintf("%sError:%s %s\n\n", ColorRed, ColorReset, m.err.Error()))
 		}
-		s.WriteString("Pick a file (.txt, .md, .go):\n\n")
+		s.WriteString("Pick a file:\n\n")
 		s.WriteString(m.filepicker.View())
 		s.WriteString("\n")
 	case stateDone:
 		s.WriteString(fmt.Sprintf("You chose: %s%s%s\n", ColorYellow, m.choices[m.selected], ColorReset))
 		s.WriteString(fmt.Sprintf("On file: %s%s%s\n\n", ColorYellow, m.selectedFile, ColorReset))
-		s.WriteString(fmt.Sprintf("Size before compression: %s%d%s bytes\n", ColorRed, m.output.initialSize, ColorReset))
-		s.WriteString(fmt.Sprintf("Size after compression: %s%d%s bytes\n\n", ColorGreen, m.output.compressedSize, ColorReset))
+
+		if m.selected == 0 && m.output != nil {
+			s.WriteString(fmt.Sprintf("Size before compression: %s%d%s bytes\n", ColorRed, m.output.initialSize, ColorReset))
+			s.WriteString(fmt.Sprintf("Size after compression: %s%d%s bytes\n\n", ColorGreen, m.output.compressedSize, ColorReset))
+		} else {
+			s.WriteString(fmt.Sprintf("File was saved with name %sdecompressed.txt%s\n\n", ColorBlue, ColorReset))	
+		}
+
 		if m.err != nil {
 			s.WriteString(fmt.Sprintf("%sError:%s %v\n", ColorRed, ColorReset, m.err))
 		} else {
-			s.WriteString("Operation" + ColorGreen + " successful" + ColorReset + "\n\n")
+			s.WriteString(fmt.Sprintf("Operation %ssuccessful%s\n\n", ColorGreen, ColorReset))
 		}
-		s.WriteString(ColorYellow + "Press any key to exit\n\n")
+		s.WriteString(fmt.Sprintf("%sPress any key to exit\n\n%s", ColorYellow, ColorReset))
 	}
 
 	s.WriteString(m.help.View(m.keys))
@@ -265,8 +276,33 @@ func handleHuffmanCoding(path string) (*compressionInfo, error) {
 	}, nil
 }
 
-func handleHuffmanDecoding() {
+func handleHuffmanDecoding(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("couldn't open compressed file: %w", err)
+	}
+	defer file.Close()
 
+	var buf bytes.Buffer
+	reader := bufio.NewReader(file)
+	err = huffman.Decode(reader, &buf)
+	if err != nil {
+		return fmt.Errorf("couldn't decompress file: %w", err)
+	}
+
+	outputPath := "decompressed.txt"
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("could not create output file: %w", err)
+	}
+	defer outputFile.Close()
+
+	_, err = buf.WriteTo(outputFile)
+	if err != nil {
+		return fmt.Errorf("could not write decompressed data: %w", err)
+	}
+
+	return nil
 }
 
 func main() {
